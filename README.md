@@ -12,6 +12,8 @@ A minimal, installable PWA for tracking gym workouts — plans, sets/reps, rest 
 - **Running / cardio logging** — cardio exercises log km and minutes instead of kg × reps, with automatic pace (min/km) and speed
 - **Guided warm-up** — timed warm-up routines (general, pre-run, upper body, lower body) with animated illustrations and spoken cues
 - **Pace calculator** — pace, speed, and 5 km / 10 km / half-marathon estimates from any run
+- **Workout summary export** — share or download a summary of a session, the week, the month or all history: exercises, sets, kg, volume, time per exercise and estimated kcal (as shareable text, .txt, or CSV for Excel)
+- **Personal records** — tracks your heaviest weight and estimated 1RM per exercise; a 🏆 alert fires the moment you beat a record mid-workout, and a Record tab shows each record's history
 - **Weekly summary** — sessions, training time, km and weekly streak at the top of the history
 - **Exercise illustrations** — simple animated stick-figure diagrams per movement (see [draw.js](draw.js))
 - **History** — past sessions are logged and viewable later

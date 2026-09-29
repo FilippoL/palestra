@@ -1,5 +1,5 @@
 'use strict';
-const CACHE = 'palestra-v2';
+const CACHE = 'palestra-v3';
 const FILES = ['./', 'index.html', 'app.js', 'data.js', 'draw.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
