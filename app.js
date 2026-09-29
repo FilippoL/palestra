@@ -18,16 +18,46 @@ function load() {
     if (j && Array.isArray(j.plans)) {
       j.history = j.history || [];
       j.settings = Object.assign({ sound: true, vibrate: true }, j.settings);
-      return j;
+      return migrate(j);
     }
   } catch (e) { /* dati assenti o corrotti */ }
-  return { plans: SEED(), history: [], active: null, rest: null, settings: { sound: true, vibrate: true } };
+  return { plans: SEED(), history: [], active: null, rest: null, settings: { sound: true, vibrate: true }, seedV: SEED_V };
+}
+/* aggiunge le schede predefinite nuove a chi ha già dei dati */
+function migrate(j) {
+  const v = j.seedV || 1;
+  if (v < SEED_V) {
+    const have = new Set(j.plans.map(p => p.key).filter(Boolean));
+    SEED().filter(p => p.since > v && !have.has(p.key)).forEach(p => j.plans.push(p));
+    j.seedV = SEED_V;
+    try { localStorage.setItem(KEY, JSON.stringify(j)); } catch (e) { /* ignora */ }
+  }
+  return j;
 }
 let S = load();
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Salvataggio non riuscito (memoria piena?)'); }
 }
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) { /* ignora */ }
+
+/* "45″", "30s", "2′", "5 min" → secondi; null se non è un tempo */
+function parseDur(s) {
+  const m = String(s || '').trim().match(/^(\d+(?:[.,]\d+)?)\s*(″|"|s|sec|′|'|min)$/i);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(',', '.'));
+  return Math.round(/^(′|'|min)$/i.test(m[2]) ? n * 60 : n);
+}
+const restOf = it => { const n = parseInt(it.rest, 10); return isNaN(n) ? 60 : Math.max(0, n); };
+/* minuti: "25", "25.5" o "25:30" */
+function parseMin(s) {
+  s = String(s || '').trim().replace(',', '.');
+  if (!s) return 0;
+  const p = s.split(':').map(Number);
+  if (p.some(isNaN)) return 0;
+  return p.length === 3 ? p[0] * 60 + p[1] + p[2] / 60 : p.length === 2 ? p[0] + p[1] / 60 : p[0];
+}
+const paceStr = (km, min) => (km > 0 && min > 0 ? fmt(min / km * 60) + '/km' : '');
+const isCardio = x => x && x.kind === 'cardio';
 
 const ui = { view: 'home', plan: null, day: null, open: {}, hTab: 'sessions', hOpen: {}, newDraw: '', newPhoto: '', addDay: null };
 
@@ -56,7 +86,7 @@ function ensureSets(it) {
   if (!A.sets[it.id]) {
     const l = lastFor(it.name);
     const n = Math.max(1, parseInt(it.sets, 10) || 3);
-    A.sets[it.id] = Array.from({ length: n }, () => ({ w: l ? l.w : '', r: /^\d+$/.test(it.reps) ? it.reps : '', d: false }));
+    A.sets[it.id] = Array.from({ length: n }, () => ({ w: l ? l.w : '', r: !isCardio(it) && /^\d+$/.test(it.reps) ? it.reps : '', d: false }));
   }
   return A.sets[it.id];
 }
@@ -116,7 +146,7 @@ function vWorkout() {
   const p = getPlan(ui.plan), d = getDay(p, ui.day), A = S.active;
   if (!d || !A) { ui.view = 'home'; return vHome(); }
   const done = d.items.filter(i => { const s = ensureSets(i); return s.length && s.every(x => x.d); }).length;
-  return `<div class="sub">${esc(p.name)}</div>
+  return `<div class="row" style="align-items:center;margin:0 0 8px"><div class="sub grow" style="margin:0">${esc(p.name)}</div><button class="btn sm" data-act="toWarmup">🔥 Riscaldamento guidato</button></div>
   <div class="bar"><i style="width:${d.items.length ? done / d.items.length * 100 : 0}%"></i></div>
   ${d.items.map(itemCard).join('')}
   <button class="btn ghost" data-act="addEx" data-d="${d.id}">+ Aggiungi esercizio</button>
@@ -126,19 +156,32 @@ function vWorkout() {
 
 function itemCard(it) {
   const st = ensureSets(it), dn = st.filter(s => s.d).length, open = ui.open[it.id], l = lastFor(it.name);
-  const rows = st.map((s, i) => `<div class="set ${s.d ? 'd' : ''}"><span class="n">${i + 1}</span>
-    <input type="number" inputmode="decimal" step="0.5" placeholder="kg" value="${esc(s.w)}" data-f="w" data-id="${it.id}" data-i="${i}" aria-label="Peso serie ${i + 1}">
+  const cardio = isCardio(it), secs = parseDur(it.reps), R0 = S.rest;
+  const rows = st.map((s, i) => {
+    const running = R0 && R0.kind === 'work' && R0.id === it.id && R0.i === i;
+    const play = secs && !s.d ? `<button class="chk play ${running ? 'on' : ''}" data-act="${running ? 'stopWork' : 'work'}" data-id="${it.id}" data-i="${i}" aria-label="${running ? 'Ferma' : 'Avvia'} timer serie ${i + 1}">${running ? '■' : '▶'}</button>` : '';
+    const f1 = cardio
+      ? `<input type="number" inputmode="decimal" step="0.01" placeholder="km" value="${esc(s.w)}" data-f="w" data-id="${it.id}" data-i="${i}" aria-label="Chilometri serie ${i + 1}"><span>km</span>
+    <input type="text" inputmode="decimal" placeholder="${esc(secs ? secs / 60 : 'min')}" value="${esc(s.r)}" data-f="r" data-id="${it.id}" data-i="${i}" aria-label="Minuti serie ${i + 1}"><span>min</span>`
+      : `<input type="number" inputmode="decimal" step="0.5" placeholder="kg" value="${esc(s.w)}" data-f="w" data-id="${it.id}" data-i="${i}" aria-label="Peso serie ${i + 1}">
     <span>kg ×</span>
-    <input type="text" inputmode="numeric" placeholder="${esc(it.reps)}" value="${esc(s.r)}" data-f="r" data-id="${it.id}" data-i="${i}" aria-label="Ripetizioni serie ${i + 1}">
-    <button class="chk" data-act="chk" data-id="${it.id}" data-i="${i}" aria-label="Serie fatta">✓</button></div>`).join('');
+    <input type="text" inputmode="numeric" placeholder="${esc(it.reps)}" value="${esc(s.r)}" data-f="r" data-id="${it.id}" data-i="${i}" aria-label="Ripetizioni serie ${i + 1}">`;
+    return `<div class="set ${s.d ? 'd' : ''}"><span class="n">${i + 1}</span>${f1}${play}
+    <button class="chk" data-act="chk" data-id="${it.id}" data-i="${i}" aria-label="Serie fatta">✓</button></div>`;
+  }).join('');
+  let km = 0, min = 0;
+  if (cardio) st.forEach(s => { km += parseFloat(s.w) || 0; min += parseMin(s.r); });
+  const rest = restOf(it);
+  const lastTxt = l && l.w !== '' ? ` · ultimo ${esc(l.w)} ${cardio ? 'km' : 'kg'}` : '';
   return `<section class="card ${st.length && dn === st.length ? 'ok' : ''}">
     <div class="ih" data-act="tog" data-id="${it.id}"><div class="th">${media(it, false)}</div>
-      <div class="im"><b>${esc(it.name)}</b><small>${esc(it.sets)}×${esc(it.reps)} · pausa ${esc(it.rest)}″${l && l.w !== '' ? ` · ultimo ${esc(l.w)} kg` : ''}</small></div>
+      <div class="im"><b>${esc(it.name)}</b><small>${esc(it.sets)}×${esc(it.reps)} · ${rest ? `pausa ${rest}″` : 'senza pausa'}${lastTxt}</small></div>
       <div class="cnt">${dn}/${st.length}</div></div>
     ${open ? `<div class="body"><div class="big">${media(it, true)}</div>${rows}
+      ${cardio && km > 0 && min > 0 ? `<div class="ss" style="margin:4px 0 8px"><span>totale <b>${+km.toFixed(2)}</b> km</span><span><b>${fmt(min * 60)}</b></span><span>passo <b>${paceStr(km, min)}</b></span><span><b>${(km / min * 60).toFixed(1)}</b> km/h</span></div>` : ''}
       <textarea placeholder="Note (sensazioni, regolazione macchina…)" data-note="${it.id}">${esc(S.active.notes[it.id] || '')}</textarea>
       <div class="acts"><button class="btn sm" data-act="addSet" data-id="${it.id}">+ serie</button><button class="btn sm" data-act="delSet" data-id="${it.id}">− serie</button>
-      <button class="btn sm" data-act="pickDraw" data-id="${it.id}">Disegno / foto</button><button class="btn sm" data-act="startRestNow" data-id="${it.id}">Timer pausa</button></div></div>` : ''}
+      <button class="btn sm" data-act="pickDraw" data-id="${it.id}">Disegno / foto</button>${rest ? `<button class="btn sm" data-act="startRestNow" data-id="${it.id}">Timer pausa</button>` : ''}</div></div>` : ''}
   </section>`;
 }
 
@@ -146,14 +189,31 @@ function vHistory() {
   const tabs = `<div class="tabs"><button class="${ui.hTab === 'sessions' ? 'on' : ''}" data-act="hTab" data-t="sessions">Sessioni</button><button class="${ui.hTab === 'progress' ? 'on' : ''}" data-act="hTab" data-t="progress">Progressi</button></div>`;
   if (!S.history.length) return tabs + `<p class="mut">Nessun allenamento salvato. Completa delle serie e premi “Termina e salva”.</p>`;
   if (ui.hTab === 'progress') return tabs + progress();
-  return tabs + S.history.map(h => {
-    const vol = h.entries.reduce((a, e) => a + e.sets.reduce((b, s) => b + (parseFloat(s.w) || 0) * (parseFloat(s.r) || 0), 0), 0);
+  return tabs + weekCard() + S.history.map(h => {
+    const vol = h.entries.reduce((a, e) => a + (isCardio(e) ? 0 : e.sets.reduce((b, s) => b + (parseFloat(s.w) || 0) * (parseFloat(s.r) || 0), 0)), 0);
+    const km = sessKm(h);
     const date = new Date(h.date).toLocaleDateString('it-IT', { weekday: 'short', day: 'numeric', month: 'short' });
     const open = ui.hOpen[h.id];
     return `<section class="card pad"><div class="row" style="align-items:center;margin:0" data-act="hTog" data-id="${h.id}"><div class="grow"><h2>${esc(h.plan)} · ${esc(h.day)}</h2>
-      <div class="ss"><span><b>${date}</b></span><span>durata <b>${fmt(h.dur)}</b></span><span>volume <b>${Math.round(vol)}</b> kg</span></div></div><span class="mut">${open ? '▾' : '▸'}</span></div>
-      ${open ? h.entries.map(e => `<div class="ent"><b>${esc(e.name)}</b><br><small>${e.sets.map(s => `${esc(s.w || '–')}×${esc(s.r || '–')}`).join(' · ')}</small>${e.note ? `<br><small>“${esc(e.note)}”</small>` : ''}</div>`).join('') + `<button class="btn danger" data-act="delHist" data-id="${h.id}">Elimina sessione</button>` : ''}</section>`;
+      <div class="ss"><span><b>${date}</b></span><span>durata <b>${fmt(h.dur)}</b></span>${vol ? `<span>volume <b>${Math.round(vol)}</b> kg</span>` : ''}${km ? `<span>corsa <b>${+km.toFixed(2)}</b> km</span>` : ''}</div></div><span class="mut">${open ? '▾' : '▸'}</span></div>
+      ${open ? h.entries.map(e => `<div class="ent"><b>${esc(e.name)}</b><br><small>${e.sets.map(s => isCardio(e) ? `${esc(s.w || '–')} km in ${esc(s.r || '–')}′${paceStr(parseFloat(s.w), parseMin(s.r)) ? ` (${paceStr(parseFloat(s.w), parseMin(s.r))})` : ''}` : `${esc(s.w || '–')}×${esc(s.r || '–')}`).join(' · ')}</small>${e.note ? `<br><small>“${esc(e.note)}”</small>` : ''}</div>`).join('') + `<button class="btn danger" data-act="delHist" data-id="${h.id}">Elimina sessione</button>` : ''}</section>`;
   }).join('');
+}
+
+const sessKm = h => h.entries.reduce((a, e) => a + (isCardio(e) ? e.sets.reduce((b, s) => b + (parseFloat(s.w) || 0), 0) : 0), 0);
+function weekCard() {
+  const mon = new Date(); mon.setHours(0, 0, 0, 0); mon.setDate(mon.getDate() - (mon.getDay() + 6) % 7);
+  const wk = S.history.filter(h => new Date(h.date) >= mon);
+  const dur = wk.reduce((a, h) => a + h.dur, 0), km = wk.reduce((a, h) => a + sessKm(h), 0);
+  /* settimane consecutive con almeno un allenamento */
+  let streak = 0;
+  for (let w = new Date(mon); ; w.setDate(w.getDate() - 7)) {
+    const end = new Date(w); end.setDate(end.getDate() + 7);
+    if (S.history.some(h => { const d = new Date(h.date); return d >= w && d < end; })) streak++;
+    else if (w < mon || streak) break;
+    else continue;
+  }
+  return `<section class="card pad"><h2>Questa settimana</h2><div class="ss"><span><b>${wk.length}</b> allenamenti</span><span><b>${fmt(dur)}</b></span>${km ? `<span><b>${+km.toFixed(2)}</b> km</span>` : ''}${streak > 1 ? `<span>🔥 <b>${streak}</b> settimane di fila</span>` : ''}</div></section>`;
 }
 
 function spark(v) {
@@ -163,24 +223,45 @@ function spark(v) {
   return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><polyline points="${pts}" fill="none" stroke="var(--acc)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 }
 function progress() {
-  const m = new Map();
-  [...S.history].reverse().forEach(h => h.entries.forEach(e => {
-    const k = e.name.trim().toLowerCase();
-    const mxw = Math.max(0, ...e.sets.map(s => parseFloat(s.w) || 0));
-    if (!m.has(k)) m.set(k, { name: e.name, v: [], best: 0 });
-    const o = m.get(k); o.name = e.name; if (mxw > 0) { o.v.push(mxw); o.best = Math.max(o.best, mxw); }
-  }));
+  const m = new Map(), run = { v: [], tot: 0, best: 0, bestPace: 0 };
+  [...S.history].reverse().forEach(h => {
+    const km = sessKm(h);
+    if (km > 0) { run.v.push(km); run.tot += km; run.best = Math.max(run.best, km); }
+    h.entries.forEach(e => {
+      if (isCardio(e)) {
+        e.sets.forEach(s => { const k = parseFloat(s.w) || 0, mn = parseMin(s.r); if (k >= 1 && mn > 0 && (!run.bestPace || mn / k < run.bestPace)) run.bestPace = mn / k; });
+        return;
+      }
+      const k = e.name.trim().toLowerCase();
+      const mxw = Math.max(0, ...e.sets.map(s => parseFloat(s.w) || 0));
+      if (!m.has(k)) m.set(k, { name: e.name, v: [], best: 0 });
+      const o = m.get(k); o.name = e.name; if (mxw > 0) { o.v.push(mxw); o.best = Math.max(o.best, mxw); }
+    });
+  });
   const rows = [...m.values()].filter(o => o.v.length).sort((a, b) => a.name.localeCompare(b.name));
-  if (!rows.length) return `<p class="mut">Registra dei pesi per vedere i progressi.</p>`;
-  return rows.map(o => `<section class="card pad"><div class="row" style="align-items:center;margin:0"><div class="grow"><b>${esc(o.name)}</b><div class="ss"><span>ultimo <b>${o.v[o.v.length - 1]}</b> kg</span><span>record <b>${o.best}</b> kg</span><span>${o.v.length} sess.</span></div></div>${spark(o.v.slice(-12))}</div></section>`).join('');
+  if (!rows.length && !run.v.length) return `<p class="mut">Registra dei pesi o dei km per vedere i progressi.</p>`;
+  const runCard = run.v.length ? `<section class="card pad"><div class="row" style="align-items:center;margin:0"><div class="grow"><b>Corsa</b><div class="ss"><span>ultima <b>${+run.v[run.v.length - 1].toFixed(2)}</b> km</span><span>totale <b>${+run.tot.toFixed(1)}</b> km</span><span>più lunga <b>${+run.best.toFixed(2)}</b> km</span>${run.bestPace ? `<span>passo migliore <b>${fmt(run.bestPace * 60)}</b>/km</span>` : ''}</div></div>${spark(run.v.slice(-12))}</div></section>` : '';
+  return runCard + rows.map(o => `<section class="card pad"><div class="row" style="align-items:center;margin:0"><div class="grow"><b>${esc(o.name)}</b><div class="ss"><span>ultimo <b>${o.v[o.v.length - 1]}</b> kg</span><span>record <b>${o.best}</b> kg</span><span>${o.v.length} sess.</span></div></div>${spark(o.v.slice(-12))}</div></section>`).join('');
 }
 
 /* Strumenti: timer round + cronometro + impostazioni + backup */
 const R = { cfg: { rounds: 3, work: 180, rest: 60, warm: 10 }, phase: 'idle', round: 0, end: 0, tot: 0, left: 0, paused: false, warned: false };
 const SW = { run: false, start: 0, acc: 0 };
+/* riscaldamento guidato: phase idle | prep | go | done */
+const WU = { r: 0, i: 0, phase: 'idle', end: 0, tot: 0, left: 0, paused: false, shown: '' };
+const PC = { km: '10', t: '55:00' };
 function vTools() {
   const c = R.cfg;
-  return `<section class="card pad"><h2>Timer round (boxe / HIIT)</h2>
+  return `<section class="card pad" id="wu"><h2>Riscaldamento guidato</h2>
+    <div class="tabs" style="flex-wrap:wrap">${WARMUPS.map((w, i) => `<button class="${WU.r === i ? 'on' : ''}" data-act="wuPick" data-i="${i}">${esc(w.name)}</button>`).join('')}</div>
+    <div class="sub" id="wusum"></div>
+    <div class="big" id="wudraw"></div>
+    <div class="phase work" id="wuname"></div><div class="big-time" id="wut">--:--</div><div class="phase" id="wunext"></div>
+    <div class="row"><button class="btn pri" data-act="wuGo" id="wugo">Avvia</button><button class="btn ghost" data-act="wuSkip">Salta ▸</button><button class="btn ghost" data-act="wuReset">Reset</button></div></section>
+    <section class="card pad"><h2>Calcolo passo (corsa)</h2>
+    <div class="row"><label>Distanza (km)<input type="number" inputmode="decimal" step="0.01" data-pc="km" value="${esc(PC.km)}"></label><label>Tempo (mm:ss o h:mm:ss)<input data-pc="t" value="${esc(PC.t)}"></label></div>
+    <div class="ss" id="pcout" style="margin-top:8px"></div></section>
+    <section class="card pad"><h2>Timer round (boxe / HIIT)</h2>
     <div class="row"><label>Round<input type="number" inputmode="numeric" data-r="rounds" value="${c.rounds}"></label><label>Lavoro (s)<input type="number" inputmode="numeric" data-r="work" value="${c.work}"></label><label>Recupero (s)<input type="number" inputmode="numeric" data-r="rest" value="${c.rest}"></label><label>Prep. (s)<input type="number" inputmode="numeric" data-r="warm" value="${c.warm}"></label></div>
     <div class="phase" id="rph"></div><div class="big-time" id="rt">--:--</div><div class="phase" id="rrd"></div>
     <div class="row"><button class="btn pri" data-act="rGo" id="rgo">Avvia</button><button class="btn ghost" data-act="rReset">Reset</button></div></section>
@@ -189,6 +270,8 @@ function vTools() {
     <section class="card pad"><h2>Impostazioni</h2>
     <div class="row"><label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:15px"><input type="checkbox" style="width:22px;height:22px;margin:0" data-set="sound" ${S.settings.sound ? 'checked' : ''}>Suoni</label>
     <label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:15px"><input type="checkbox" style="width:22px;height:22px;margin:0" data-set="vibrate" ${S.settings.vibrate ? 'checked' : ''}>Vibrazione</label></div></section>
+    <section class="card pad"><h2>Schede predefinite</h2><div class="sub">Aggiungi di nuovo una scheda predefinita (ne viene creata una copia, le tue schede non cambiano).</div>
+    ${SEED().map(p => `<div class="row" style="align-items:center"><div class="grow"><b>${esc(p.name)}</b><div class="sub" style="margin:0">${esc(p.sub)}</div></div><button class="btn sm" data-act="addSeed" data-k="${p.key}">+ Aggiungi</button></div>`).join('')}</section>
     <section class="card pad"><h2>Backup</h2><div class="sub">I dati restano su questo dispositivo. Esporta un file per salvarli o spostarli.</div>
     <button class="btn" data-act="export">Esporta backup (.json)</button>
     <label class="btn ghost" style="text-align:center;color:var(--txt);font-size:15px">Importa backup<input type="file" accept="application/json,.json" id="impIn" hidden></label>
@@ -204,7 +287,8 @@ function vEdit() {
       <button class="ib" data-act="dayMv" data-d="${d.id}" data-dir="-1">↑</button><button class="ib" data-act="dayMv" data-d="${d.id}" data-dir="1">↓</button><button class="ib x" data-act="delDay" data-d="${d.id}">✕</button></div>
       ${d.items.map(i => `<div style="border-top:1px solid var(--line);margin-top:10px;padding-top:8px"><div class="row"><div class="th" style="width:64px;height:40px">${media(i, false)}</div><input class="grow" data-ei="${i.id}" data-k="name" value="${esc(i.name)}">
         <button class="ib" data-act="itMv" data-d="${d.id}" data-id="${i.id}" data-dir="-1">↑</button><button class="ib" data-act="itMv" data-d="${d.id}" data-id="${i.id}" data-dir="1">↓</button><button class="ib x" data-act="delIt" data-d="${d.id}" data-id="${i.id}">✕</button></div>
-        <div class="row"><label>Serie<input inputmode="numeric" data-ei="${i.id}" data-k="sets" value="${esc(i.sets)}"></label><label>Rip.<input data-ei="${i.id}" data-k="reps" value="${esc(i.reps)}"></label><label>Pausa ″<input inputmode="numeric" data-ei="${i.id}" data-k="rest" value="${esc(i.rest)}"></label><button class="btn sm" style="height:44px" data-act="pickDraw" data-id="${i.id}">Disegno</button></div></div>`).join('')}
+        <div class="row"><label>Serie<input inputmode="numeric" data-ei="${i.id}" data-k="sets" value="${esc(i.sets)}"></label><label>Rip.<input data-ei="${i.id}" data-k="reps" value="${esc(i.reps)}"></label><label>Pausa ″<input inputmode="numeric" data-ei="${i.id}" data-k="rest" value="${esc(i.rest)}"></label><button class="btn sm" style="height:44px" data-act="pickDraw" data-id="${i.id}">Disegno</button></div>
+        <div class="row"><label>Tipo<select data-ei="${i.id}" data-k="kind">${kindOpts(i.kind)}</select></label></div></div>`).join('')}
       <button class="btn ghost" data-act="addEx" data-d="${d.id}">+ Esercizio</button></section>`).join('')}
     <button class="btn ghost" data-act="addDay">+ Giorno</button>
     <button class="btn" data-act="dupPlan">Duplica scheda</button>
@@ -225,7 +309,8 @@ function render(keep) {
   $('#back').hidden = !(v === 'workout' || v === 'edit');
   $$('nav button').forEach(b => b.classList.toggle('on', b.dataset.v === navOf(ui.view)));
   updateClock(); renderRestBar();
-  if (v === 'tools') { rDisp(); swDisp(); }
+  if (v === 'tools') { rDisp(); swDisp(); WU.shown = ''; wuDisp(); pcDisp(); }
+  if (ui.scrollTo) { const el = document.getElementById(ui.scrollTo); ui.scrollTo = null; if (el) { el.scrollIntoView(); return; } }
   scrollTo(0, keep ? y : 0);
 }
 
@@ -245,7 +330,9 @@ function renderRestBar() {
   if (!r) return;
   const left = (r.end - Date.now()) / 1000;
   b.classList.toggle('done', r.done);
-  $('#rlab').textContent = r.done ? 'Pausa finita' : 'Pausa · ' + r.label;
+  b.classList.toggle('work', r.kind === 'work');
+  $('#rlab').textContent = r.kind === 'work' ? 'Esecuzione · ' + r.label : r.done ? 'Pausa finita' : 'Pausa · ' + r.label;
+  $('#rskip').textContent = r.kind === 'work' ? 'Fatto' : 'Salta';
   $('#rtime').textContent = r.done ? 'VIA!' : fmt(Math.ceil(left));
   $('#rfill').style.width = r.done ? '100%' : Math.max(0, Math.min(100, (1 - left / r.total) * 100)) + '%';
 }
@@ -287,21 +374,93 @@ function swDisp() {
   $('#swgo').textContent = SW.run ? 'Stop' : 'Avvia';
 }
 
+/* riscaldamento guidato */
+function say(t) {
+  if (!S.settings.sound) return;
+  try { const u = new SpeechSynthesisUtterance(t); u.lang = 'it-IT'; speechSynthesis.cancel(); speechSynthesis.speak(u); } catch (e) { /* voce non disponibile */ }
+}
+const wuSteps = () => WARMUPS[WU.r].steps;
+function wuSet(phase, i) {
+  const st = wuSteps();
+  WU.phase = phase; WU.i = i; WU.paused = false;
+  WU.tot = phase === 'prep' ? 5 : st[i][1];
+  WU.end = Date.now() + WU.tot * 1000;
+  if (phase === 'prep') { say('Si parte con ' + st[i][0]); beep(600, .3); }
+  else { say(st[i][0]); beep(1200, .4); vib([200, 80, 200]); }
+}
+function wuNext() {
+  if (WU.i + 1 < wuSteps().length) wuSet('go', WU.i + 1);
+  else { WU.phase = 'done'; say('Riscaldamento finito, buon allenamento!'); beep(900, .6, 3); vib([300, 100, 300]); }
+}
+function wuTick() {
+  if (!['prep', 'go'].includes(WU.phase) || WU.paused) return;
+  const left = (WU.end - Date.now()) / 1000;
+  if (WU.phase === 'go' && left <= 3 && left > 0 && Math.ceil(left) !== WU.lastBeep) { WU.lastBeep = Math.ceil(left); beep(700, .08); }
+  if (left <= 0) { if (WU.phase === 'prep') wuSet('go', WU.i); else wuNext(); }
+}
+function wuDisp() {
+  const t = $('#wut'); if (!t) return;
+  const st = wuSteps(), cur = st[Math.min(WU.i, st.length - 1)], nx = st[WU.i + 1];
+  const tot = st.reduce((a, s) => a + s[1], 0);
+  $('#wusum').textContent = `${st.length} esercizi · ${fmt(tot)} in totale`;
+  const key = WU.r + ':' + WU.i + ':' + WU.phase;
+  if (WU.shown !== key) { WU.shown = key; $('#wudraw').innerHTML = WU.phase === 'done' ? '<div class="noimg">✓</div>' : DRAW.svg(cur[2], { anim: true }); }
+  const left = WU.phase === 'idle' ? cur[1] : WU.phase === 'done' ? 0 : WU.paused ? WU.left : (WU.end - Date.now()) / 1000;
+  t.textContent = fmt(Math.ceil(left));
+  $('#wuname').textContent = WU.phase === 'done' ? 'Finito! Buon allenamento' : (WU.phase === 'prep' ? 'Preparati · ' : `${WU.i + 1}/${st.length} · `) + cur[0] + (WU.paused ? ' (pausa)' : '');
+  $('#wunext').textContent = WU.phase !== 'done' && nx ? 'Poi: ' + nx[0] : '';
+  const running = ['prep', 'go'].includes(WU.phase) && !WU.paused;
+  $('#wugo').textContent = running ? 'Pausa' : WU.paused ? 'Riprendi' : 'Avvia';
+}
+function pcDisp() {
+  const o = $('#pcout'); if (!o) return;
+  const km = parseFloat(String(PC.km).replace(',', '.')) || 0, min = parseMin(PC.t);
+  if (!(km > 0 && min > 0)) { o.innerHTML = '<span>Inserisci distanza e tempo</span>'; return; }
+  /* stima con la formula di Riegel (esponente 1.06) */
+  const pace = min / km, pred = d => fmt(pace * 60 * d * Math.pow(d / km, 0.06));
+  o.innerHTML = `<span>passo <b>${fmt(pace * 60)}</b>/km</span><span><b>${(km / min * 60).toFixed(1)}</b> km/h</span>
+    <span>stima 5 km <b>${pred(5)}</b></span><span>10 km <b>${pred(10)}</b></span><span>mezza <b>${pred(21.0975)}</b></span>`;
+}
+
+/* serie a tempo: usa la barra della pausa in modalità "work" */
+function startWork(it, i) {
+  const secs = parseDur(it.reps); if (!secs) return;
+  S.rest = { kind: 'work', id: it.id, i, end: Date.now() + secs * 1000, total: secs, label: it.name, done: false };
+  beep(1200, .3); vib([150, 60, 150]); save(); render(true);
+}
+function workDone(r) {
+  const st = S.active && S.active.sets[r.id], s = st && st[r.i], it = findItem(r.id);
+  S.rest = null;
+  if (s && !s.d) {
+    s.d = true;
+    if (!s.r) s.r = it && isCardio(it) ? String(+(r.total / 60).toFixed(2)) : (it ? it.reps : '');
+  }
+  beep(900, .18, 3); vib([250, 100, 250]);
+  if (it && restOf(it)) startRest(restOf(it), it.name);
+  save(); if (ui.view === 'workout') render(true);
+}
+
 setInterval(() => {
   updateClock();
   const r = S.rest;
-  if (r) {
+  if (r && r.kind === 'work') {
+    const left = (r.end - Date.now()) / 1000;
+    if (left <= 3 && left > 0 && Math.ceil(left) !== r.lastBeep) { r.lastBeep = Math.ceil(left); beep(700, .08); }
+    if (left <= 0) workDone(r); else renderRestBar();
+  } else if (r) {
     if (!r.done && r.end - Date.now() <= 0) { r.done = true; r.doneAt = Date.now(); save(); beep(880, .18, 3); vib([250, 100, 250, 100, 250]); }
     if (r.done && Date.now() - r.doneAt > 4000) { S.rest = null; save(); }
     renderRestBar();
   }
-  rTick(); rDisp(); swDisp();
+  rTick(); rDisp(); swDisp(); wuTick(); wuDisp();
 }, 250);
 
 /* ---------- modali ---------- */
 function modal(html) { const m = $('#modal'); m.innerHTML = `<div class="sheet">${html}</div>`; m.hidden = false; }
 function closeModal() { const m = $('#modal'); m.hidden = true; m.innerHTML = ''; }
 const drawGrid = (cur, act) => `<div class="grid">${DRAW.keys().map(({ k, name }) => `<button class="pk ${cur === k ? 'on' : ''}" data-act="${act}" data-k="${k}">${DRAW.svg(k, { first: true })}<br>${esc(name)}</button>`).join('')}</div>`;
+
+const kindOpts = k => `<option value="" ${k ? '' : 'selected'}>Pesi (kg × rip.)</option><option value="cardio" ${k === 'cardio' ? 'selected' : ''}>Corsa / cardio (km, min)</option>`;
 
 function pickDraw(id) {
   const it = findItem(id); if (!it) return;
@@ -317,7 +476,9 @@ function addExModal(dayId) {
   const names = [...new Set(allItems().map(i => i.name))].sort();
   modal(`<h3>Nuovo esercizio</h3>
     <label>Nome<input id="nx-name" list="names" autocomplete="off" placeholder="es. Cable crossover"></label><datalist id="names">${names.map(n => `<option value="${esc(n)}">`).join('')}</datalist>
-    <div class="row"><label>Serie<input id="nx-sets" inputmode="numeric" value="3"></label><label>Rip.<input id="nx-reps" value="10"></label><label>Pausa ″<input id="nx-rest" inputmode="numeric" value="90"></label></div>
+    <div class="row"><label>Serie<input id="nx-sets" inputmode="numeric" value="3"></label><label>Rip. / tempo<input id="nx-reps" value="10"></label><label>Pausa ″<input id="nx-rest" inputmode="numeric" value="90"></label></div>
+    <label>Tipo<select id="nx-kind">${kindOpts('')}</select></label>
+    <div class="sub" style="margin-top:6px">Tempo: scrivi ad es. 45″ o 2′ per avere il conto alla rovescia su ogni serie.</div>
     <label class="btn" style="text-align:center;font-size:15px">Aggiungi foto (facoltativo)<input type="file" accept="image/*" id="photoIn" data-for="new" hidden></label>
     <div class="lab">Disegno</div>${drawGrid('', 'nxDraw')}
     <button class="btn pri" data-act="nxSave">Aggiungi</button><button class="btn ghost" data-act="close">Annulla</button>`);
@@ -350,7 +511,7 @@ function finish() {
   const A = S.active, p = getPlan(A.pid), d = getDay(p, A.did), entries = [];
   d.items.forEach(it => {
     const sets = (A.sets[it.id] || []).filter(s => s.d).map(s => ({ w: s.w, r: s.r }));
-    if (sets.length) entries.push({ name: it.name, draw: it.draw, sets, note: A.notes[it.id] || '' });
+    if (sets.length) entries.push({ name: it.name, draw: it.draw, kind: it.kind || '', sets, note: A.notes[it.id] || '' });
   });
   if (!entries.length && !confirm('Nessuna serie completata. Uscire senza salvare?')) return;
   if (entries.length) { S.history.unshift({ id: uid(), date: new Date().toISOString(), plan: p.name, day: d.name, dur: Math.round((Date.now() - A.start) / 1000), entries }); toast('Allenamento salvato'); }
@@ -372,15 +533,28 @@ document.addEventListener('click', e => {
     case 'chk': {
       const st = S.active.sets[d.id], i = +d.i, s = st[i];
       s.d = !s.d;
-      if (s.d) { for (let j = i + 1; j < st.length; j++) if (!st[j].d && st[j].w === '') st[j].w = s.w; const it = findItem(d.id); if (it) startRest(parseInt(it.rest, 10) || 60, it.name); vib(30); }
+      if (S.rest && S.rest.kind === 'work' && S.rest.id === d.id && S.rest.i === i) S.rest = null;
+      if (s.d) { for (let j = i + 1; j < st.length; j++) if (!st[j].d && st[j].w === '') st[j].w = s.w; const it = findItem(d.id); if (it && restOf(it)) startRest(restOf(it), it.name); vib(30); }
       save(); render(true); break;
     }
+    case 'work': { const it = findItem(d.id); if (it) startWork(it, +d.i); break; }
+    case 'stopWork': S.rest = null; save(); render(true); break;
+    case 'toWarmup': ui.view = 'tools'; ui.scrollTo = 'wu'; render(); break;
+    case 'wuPick': if (!['prep', 'go'].includes(WU.phase) || confirm('Interrompere il riscaldamento in corso?')) { WU.r = +d.i; WU.i = 0; WU.phase = 'idle'; WU.paused = false; render(true); } break;
+    case 'wuGo':
+      if (WU.phase === 'idle' || WU.phase === 'done') wuSet('prep', 0);
+      else if (WU.paused) { WU.paused = false; WU.end = Date.now() + WU.left * 1000; }
+      else { WU.left = (WU.end - Date.now()) / 1000; WU.paused = true; }
+      wuDisp(); break;
+    case 'wuSkip': if (WU.phase === 'prep') wuSet('go', WU.i); else if (WU.phase === 'go') wuNext(); wuDisp(); break;
+    case 'wuReset': WU.phase = 'idle'; WU.i = 0; WU.paused = false; try { speechSynthesis.cancel(); } catch (err) { /* ignora */ } wuDisp(); break;
+    case 'addSeed': { const p = SEED().find(x => x.key === d.k); if (p) { S.plans.push(p); save(); toast(`“${p.name}” aggiunta alle schede`); } break; }
     case 'addSet': { const st = S.active.sets[d.id]; const l = st[st.length - 1] || { w: '', r: '' }; st.push({ w: l.w, r: l.r, d: false }); save(); render(true); break; }
     case 'delSet': { const st = S.active.sets[d.id]; if (st.length > 1) st.pop(); save(); render(true); break; }
-    case 'startRestNow': { const it = findItem(d.id); startRest(parseInt(it.rest, 10) || 60, it.name); break; }
+    case 'startRestNow': { const it = findItem(d.id); startRest(restOf(it) || 60, it.name); break; }
     case 'rm': if (S.rest) { S.rest.end -= 15000; S.rest.total = Math.max(5, S.rest.total - 15); S.rest.done = false; save(); } break;
     case 'rp': if (S.rest) { S.rest.end += 15000; S.rest.total += 15; S.rest.done = false; save(); } break;
-    case 'rskip': S.rest = null; save(); renderRestBar(); break;
+    case 'rskip': if (S.rest && S.rest.kind === 'work') workDone(S.rest); else { S.rest = null; save(); renderRestBar(); } break;
     case 'finish': finish(); break;
     case 'cancelSession': if (confirm('Scartare questo allenamento senza salvarlo?')) { S.active = null; S.rest = null; save(); unwake(); ui.view = 'home'; render(); } break;
     case 'pickDraw': pickDraw(d.id); break;
@@ -391,7 +565,7 @@ document.addEventListener('click', e => {
     case 'nxSave': {
       const name = $('#nx-name').value.trim(); if (!name) { toast('Inserisci un nome'); break; }
       const p = getPlan(ui.plan), day = getDay(p, ui.addDay); if (!day) break;
-      const it = { id: uid(), name, sets: $('#nx-sets').value || '3', reps: $('#nx-reps').value || '10', rest: $('#nx-rest').value || '90', draw: ui.newDraw };
+      const it = { id: uid(), name, sets: $('#nx-sets').value || '3', reps: $('#nx-reps').value || '10', rest: $('#nx-rest').value || '90', draw: ui.newDraw, kind: $('#nx-kind').value };
       if (ui.newPhoto) it.photo = ui.newPhoto;
       day.items.push(it); save(); closeModal(); toast('Esercizio aggiunto'); render(true); break;
     }
@@ -435,6 +609,7 @@ document.addEventListener('input', e => {
   else if (d.ed) { getDay(getPlan(ui.plan), d.ed).name = t.value; save(); }
   else if (d.ei) { const it = findItem(d.ei); if (it) { it[d.k] = t.value; save(); } }
   else if (d.r) { R.cfg[d.r] = Math.max(0, parseInt(t.value, 10) || 0); }
+  else if (d.pc) { PC[d.pc] = t.value; pcDisp(); }
   else if (d.set) { S.settings[d.set] = t.checked; save(); }
 });
 document.addEventListener('change', e => {
@@ -452,14 +627,14 @@ document.addEventListener('change', e => {
         const j = JSON.parse(fr.result);
         if (!Array.isArray(j.plans)) throw new Error('formato');
         if (!confirm('Sostituire i dati attuali con il backup?')) return;
-        S = Object.assign({ history: [], active: null, rest: null, settings: { sound: true, vibrate: true } }, j); save(); toast('Backup importato'); ui.view = 'home'; render();
+        S = migrate(Object.assign({ history: [], active: null, rest: null, settings: { sound: true, vibrate: true } }, j)); save(); toast('Backup importato'); ui.view = 'home'; render();
       } catch (err) { toast('File di backup non valido'); }
     };
     fr.readAsText(t.files[0]);
   } else if (t.id === 'nx-name') {
     const n = t.value.trim().toLowerCase(), m = allItems().find(i => i.name.trim().toLowerCase() === n);
     if (m) {
-      $('#nx-sets').value = m.sets; $('#nx-reps').value = m.reps; $('#nx-rest').value = m.rest; ui.newDraw = m.draw || ''; if (m.photo) ui.newPhoto = m.photo;
+      $('#nx-sets').value = m.sets; $('#nx-reps').value = m.reps; $('#nx-rest').value = m.rest; $('#nx-kind').value = m.kind || ''; ui.newDraw = m.draw || ''; if (m.photo) ui.newPhoto = m.photo;
       $$('#modal .pk').forEach(b => b.classList.toggle('on', b.dataset.k === ui.newDraw));
     }
   }

@@ -6,8 +6,13 @@ A minimal, installable PWA for tracking gym workouts — plans, sets/reps, rest 
 
 ## Features
 
-- **Workout plans** — organized into days, each with exercises (sets, reps, rest time), including a preloaded example schedule
+- **Workout plans** — organized into days, each with exercises (sets, reps, rest time), including preloaded schedules: Full Body, Split, boxing prep, **Riscaldamento** (warm-up), **Corsa** (running: easy runs, intervals, fartlek, long run, strength for runners), **Una gamba sola** / **Una spalla sola** (unilateral training, or working around an injured leg/shoulder) and **Corpo libero** (bodyweight at home). New preset plans are added automatically for existing users and can be re-added from the Tools tab
 - **Guided sessions** — step through an exercise, log each set, and get an automatic rest timer between sets
+- **Timed sets** — exercises with a time target (e.g. `45″`, `2′`) get a ▶ countdown per set that ticks the set off and starts the rest when it ends
+- **Running / cardio logging** — cardio exercises log km and minutes instead of kg × reps, with automatic pace (min/km) and speed
+- **Guided warm-up** — timed warm-up routines (general, pre-run, upper body, lower body) with animated illustrations and spoken cues
+- **Pace calculator** — pace, speed, and 5 km / 10 km / half-marathon estimates from any run
+- **Weekly summary** — sessions, training time, km and weekly streak at the top of the history
 - **Exercise illustrations** — simple animated stick-figure diagrams per movement (see [draw.js](draw.js))
 - **History** — past sessions are logged and viewable later
 - **Tools** — a standalone stopwatch/interval timer tab

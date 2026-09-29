@@ -70,10 +70,14 @@ nav button.on{color:var(--acc)}
 nav button b{display:block;font-size:20px;margin-bottom:2px}
 #restbar{position:fixed;left:10px;right:10px;bottom:calc(66px + env(safe-area-inset-bottom));z-index:31;background:var(--card2);border:1px solid var(--acc-d);border-radius:14px;padding:10px 12px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
 #restbar.done{background:var(--acc);color:#04170c;border-color:var(--acc)}
+#restbar.work{border-color:var(--warn)}
+#restbar.work #rfill{background:var(--warn)}
+.chk.play{color:var(--warn);border-color:var(--warn);font-size:18px}
+.chk.play.on{background:var(--warn);color:#1a1200}
 .rprog{height:4px;background:var(--line);border-radius:4px;overflow:hidden;margin-bottom:8px}
 #rfill{display:block;height:100%;background:var(--acc);width:0}
 .rrow{display:flex;align-items:center;gap:10px}
-.rrow>div:first-child{flex:1}.rrow small{display:block;opacity:.75;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rrow>div:first-child{flex:1;min-width:0}.rrow small{display:block;opacity:.75;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #rtime{font:700 28px ui-monospace,Menlo,monospace}
 .rbtn{display:flex;gap:6px}.rbtn button{border:1px solid var(--line);background:var(--bg);color:var(--txt);border-radius:10px;padding:10px;font:700 14px inherit}
 #modal{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.65);display:flex;align-items:flex-end;justify-content:center}
@@ -120,7 +124,7 @@ nav button b{display:block;font-size:20px;margin-bottom:2px}
   <div class="rprog"><i id="rfill"></i></div>
   <div class="rrow">
     <div><small id="rlab">Pausa</small><b id="rtime">00:00</b></div>
-    <div class="rbtn"><button data-act="rm">−15</button><button data-act="rp">+15</button><button data-act="rskip">Salta</button></div>
+    <div class="rbtn"><button data-act="rm">−15</button><button data-act="rp">+15</button><button data-act="rskip" id="rskip">Salta</button></div>
   </div>
 </div>
 
